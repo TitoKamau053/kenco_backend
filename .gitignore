@@ -18,7 +18,7 @@ pids/
 *.pid.lock
 
 # Directory for uploaded files
-uploads/
+
 
 # IDE and editor files
 .idea/
@@ -37,6 +37,3 @@ build/
 # Temporary files
 *.tmp
 *.temp
-
-
-.migration/
