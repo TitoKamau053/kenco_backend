@@ -501,47 +501,93 @@ app.post('/api/auth/login', async (req, res) => {
 
 // Register User
 app.post('/api/auth/register', async (req, res) => {
+  console.log('Registration attempt received:', {
+    name: req.body.name,
+    email: req.body.email,
+    hasPassword: !!req.body.password,
+    role: req.body.role
+  });
+
   try {
     const { name, email, password, role } = req.body;
     const userRole = role === 'tenant' ? 'tenant' : 'landlord';
 
-        // Validate input
+    // Input validation
     if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Please enter all fields' });
+      console.log('Missing registration fields:', { name, email, password });
+      return res.status(400).json({
+        message: 'Please enter all required fields',
+        details: {
+          name: !name ? 'Name is required' : null,
+          email: !email ? 'Email is required' : null,
+          password: !password ? 'Password is required' : null
+        }
+      });
     }
-    
-    // Check if user exists
-    const [rows] = await connection.execute('SELECT * FROM users WHERE email = ?', [email]);
-    
-    if (rows.length > 0) {
-      return res.status(400).json({ message: 'User already exists' });
+
+    // Check if user already exists
+    console.log('Checking if user already exists:', email);
+    const [existingUser] = await connection.execute(
+      'SELECT * FROM users WHERE email = ?',
+      [email]
+    );
+
+    if (existingUser.length > 0) {
+      return res.status(400).json({
+        message: 'User already exists',
+        detail: 'Email is already registered'
+      });
     }
-    
-    // Hash password
+
+    // Hash the password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    
-    // Insert user as landlord
-    await connection.execute(
+
+    // Insert user into database
+    const [result] = await connection.execute(
       'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
       [name, email, hashedPassword, userRole]
     );
 
-    
+    console.log('Landlord registered:', {
+      userId: result.insertId,
+      email,
+      role: userRole,
+      timestamp: new Date().toISOString()
+    });
+
+    // Create JWT
+    const token = jwt.sign(
+      { id: result.insertId, role: userRole },
+      process.env.JWT_SECRET || 'your_jwt_secret',
+      { expiresIn: '1d' }
+    );
+
+    // Respond with token and user
     res.status(201).json({
-      message: 'Landlord registered successfully',
+      token,
       user: {
         id: result.insertId,
         name,
         email,
-        role: 'landlord'
+        role: userRole
       }
     });
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Registration error:', {
+      error: err.message,
+      stack: err.stack,
+      timestamp: new Date().toISOString()
+    });
+
+    res.status(500).json({
+      message: 'Server error',
+      detail: err.message
+    });
   }
 });
+
 
 /**
  * Protected Routes 
