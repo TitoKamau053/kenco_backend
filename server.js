@@ -77,14 +77,13 @@ const connectDB = async () => {
 // Initialize database with tables
 const initializeDB = async (connection) => {
   try {
-    // Create users table
     await connection.execute(`
       CREATE TABLE IF NOT EXISTS users (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(100) NOT NULL,
         email VARCHAR(100) UNIQUE NOT NULL,
         password VARCHAR(255) NOT NULL,
-        role ENUM('landlord', 'tenant') NOT NULL,
+        role ENUM('landlord', 'tenant', 'admin') NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -503,9 +502,10 @@ app.post('/api/auth/login', async (req, res) => {
 // Register User
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
-    
-    // Validate input
+    const { name, email, password, role } = req.body;
+    const userRole = role === 'tenant' ? 'tenant' : 'landlord';
+
+        // Validate input
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Please enter all fields' });
     }
@@ -522,10 +522,11 @@ app.post('/api/auth/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, salt);
     
     // Insert user as landlord
-    const [result] = await connection.execute(
-      'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, "landlord")',
-      [name, email, hashedPassword]
+    await connection.execute(
+      'INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)',
+      [name, email, hashedPassword, userRole]
     );
+
     
     res.status(201).json({
       message: 'Landlord registered successfully',
@@ -2304,6 +2305,139 @@ app.get('/api/landlord/payments', authenticateToken, checkRole('landlord'), asyn
     });
   }
 });
+
+/**
+ * Report Generation API Routes
+ */
+
+// Generate payment reports
+app.get('/api/reports/payments', authenticateToken, checkRole('landlord'), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    let query = `
+      SELECT 
+        p.id,
+        p.amount,
+        p.payment_date,
+        p.payment_method,
+        p.payment_status,
+        p.reference_number,
+        u.name as tenant_name,
+        prop.title as property_title,
+        prop.address as property_address
+      FROM payments p
+      JOIN tenants t ON p.tenant_id = t.id
+      JOIN users u ON t.user_id = u.id
+      JOIN properties prop ON p.property_id = prop.id
+      WHERE prop.landlord_id = ?
+    `;
+    
+    const params = [req.user.id];
+    
+    // Add date filters if provided
+    if (startDate) {
+      query += ' AND p.payment_date >= ?';
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ' AND p.payment_date <= ?';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY p.payment_date DESC';
+    
+    const [results] = await connection.execute(query, params);
+    
+    res.json(results);
+  } catch (err) {
+    console.error('Error generating payment report:', err);
+    res.status(500).json({ message: 'Failed to generate payment report' });
+  }
+});
+
+// Generate property reports
+app.get('/api/reports/properties', authenticateToken, checkRole('landlord'), async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+        p.id,
+        p.title,
+        p.address,
+        p.price,
+        p.bedrooms,
+        p.bathrooms,
+        p.area,
+        p.status,
+        p.created_at,
+        COUNT(t.id) as tenant_count,
+        SUM(CASE WHEN pay.payment_status = 'completed' THEN pay.amount ELSE 0 END) as total_revenue
+      FROM properties p
+      LEFT JOIN tenants t ON p.id = t.property_id
+      LEFT JOIN payments pay ON p.id = pay.property_id
+      WHERE p.landlord_id = ?
+      GROUP BY p.id
+      ORDER BY p.created_at DESC
+    `;
+    
+    const [results] = await connection.execute(query, [req.user.id]);
+    
+    res.json(results);
+  } catch (err) {
+    console.error('Error generating property report:', err);
+    res.status(500).json({ message: 'Failed to generate property report' });
+  }
+});
+
+// Generate complaint reports
+app.get('/api/reports/complaints', authenticateToken, checkRole('landlord'), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    
+    let query = `
+      SELECT 
+        c.id,
+        c.subject,
+        c.description,
+        c.category,
+        c.status,
+        c.created_at,
+        c.updated_at,
+        u.name as tenant_name,
+        p.title as property_title,
+        p.address as property_address
+      FROM complaints c
+      JOIN tenants t ON c.tenant_id = t.id
+      JOIN users u ON t.user_id = u.id
+      JOIN properties p ON c.property_id = p.id
+      WHERE p.landlord_id = ?
+    `;
+    
+    const params = [req.user.id];
+    
+    // Add date filters if provided
+    if (startDate) {
+      query += ' AND c.created_at >= ?';
+      params.push(startDate);
+    }
+    
+    if (endDate) {
+      query += ' AND c.created_at <= ?';
+      params.push(endDate);
+    }
+    
+    query += ' ORDER BY c.created_at DESC';
+    
+    const [results] = await connection.execute(query, params);
+    
+    res.json(results);
+  } catch (err) {
+    console.error('Error generating complaint report:', err);
+    res.status(500).json({ message: 'Failed to generate complaint report' });
+  }
+});
+
 
 /**
  * Error Handling Middleware
